@@ -65,7 +65,7 @@ async function appendToGoogleSheet(data) {
     };
 
     // Need to review this code for future changes
-    await sheets.spreadsheets.values.append({
+    sheets.spreadsheets.values.append({
         spreadsheetId: SPREADSHEET_ID,
         range: 'Sheet1!A2', 
         valueInputOption: 'RAW',
@@ -73,14 +73,15 @@ async function appendToGoogleSheet(data) {
     });
 }
 
-mongoose.connect(MONGODB_URI, {
-        useNewUrlParser: true,
-        useUnifiedTopology: true,
-    }).then(() => {
+mongoose.connect(MONGODB_URI, {}).then(() => {
         console.log('Connected to MongoDB');
     }).catch(err => {
         console.error('Error connecting to MongoDB:', err);
     });
+
+app.get('/', (_, res) => {
+    res.json({ message: 'Hello World!' });
+})
 
 app.get('/api/places', async (req, res) => {
     const { type, location } = req.query;
@@ -112,10 +113,18 @@ app.get('/api/places', async (req, res) => {
         }));
 
         // Push data to Google Sheets
-        await appendToGoogleSheet(detailedPlaces);
+        await appendToGoogleSheet(detailedPlaces).then(() => {
+            console.log('Data saved to Google Sheets');
+        }).catch(err => {
+            console.error('Error saving data to Google Sheets:', err);
+        });
 
         // Save data to MongoDB using Mongoose
-        await Business.insertMany(detailedPlaces);
+        await Business.insertMany(detailedPlaces).then(() => {
+            console.log('Data saved to MongoDB');
+        }).catch(err => {
+            console.error('Error saving data to MongoDB:', err);
+        });
 
         // For Troubleshooting
         // console.log(detailedPlaces);
