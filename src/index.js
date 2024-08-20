@@ -1,9 +1,14 @@
 import express from 'express';
-import axios from 'axios';
 import dotenv from 'dotenv';
-import cors from 'cors';
-import { google } from 'googleapis';
+import nodemailer from 'nodemailer';
 import mongoose from 'mongoose';
+import axios from 'axios';
+import cors from 'cors';
+import { authenticateUser } from './middleware/authMiddleware.js';
+import { appendToGoogleSheet } from './services/googleSheetService.js';
+import userRoutes from './routes/userRoutes.js';
+import businessRoutes from './routes/businessRoutes.js';
+import Business from './models/businessModel.js';
 
 dotenv.config();
 
@@ -11,97 +16,53 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 
 app.use(cors());
+app.use(express.json());
 
-// MongoDB connection URI
-const MONGODB_URI = process.env.MONGODB_URI;
+mongoose.connect(process.env.MONGODB_URI, {
+  useNewUrlParser: true,
+  useUnifiedTopology: true,
+})
+  .then(() => console.log('Connected to MongoDB'))
+  .catch((err) => console.error('Error connecting to MongoDB:', err));
 
-// Define a Mongoose schema for the business data
-const businessSchema = new mongoose.Schema({
-    name: String,
-    formatted_address: String,
-    formatted_phone_number: String,
-    website: String,
-    rating: Number,
-    user_ratings_total: Number,
-    opening_hours: Object,
-    price_level: Number,
-    icon: String
-});
+app.post('/api/email', async (req, res) => {
+    const { email, subject, message } = req.body;
 
-const Business = mongoose.model('Business', businessSchema);
-
-// Google Sheets API setup
-const SCOPES = ['https://www.googleapis.com/auth/spreadsheets'];
-const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
-const credentialsPath = 'credentials.json';
-
-// Function to authenticate and get Google Sheets client
-async function getSheetsClient() {
-    const auth = new google.auth.GoogleAuth({
-         keyFile: credentialsPath,
-        credentials:{
-    //         type: process.env.TYPE,
-    //         project_id: process.env.PROJECT_ID,
-    //         private_key_id: process.env.PRIVATE_KEY_ID,
-             private_key: process.env.PRIVATE_KEY.replace(/\\n/g, '\n'),
-             client_email: process.env.CLIENT_EMAIL,
-    //         client_id: process.env.CLIENT_ID,
-    //         auth_uri: process.env.AUTH_URI,
-    //         token_uri: process.env.TOKEN_URI,
-    //         auth_provider_x509_cert_url: process.env.AUTH_PROVIDER,
-    //         client_x509_cert_url: process.env.CLIENT,
-    //         universe_domain: process.env.UNIVERSAL_DOMAIN,
-        },
-        scopes: SCOPES,
+    const transporter = nodemailer.createTransport({
+        service: 'gmail', //Only upto 500 mails
+        host: 'smtp.gmail.com',
+        secure: false, 
+        auth: {
+            user: process.env.GMAIL_USER,
+            pass: process.env.GMAIL_PASS
+        }
     });
 
-    //console.log()
-
-    const authClient = await auth.getClient();
-    const sheets = google.sheets({ version: 'v4', auth: authClient });
-    return sheets;
-}
-
-// Function to add data to Google Sheets
-async function appendToGoogleSheet(data) {
-    const sheets = await getSheetsClient();
-
-    const resource = {
-        values: data.map(business => [
-            business.name,
-            business.formatted_address,
-            business.formatted_phone_number || 'N/A',
-            business.website || 'N/A',
-            business.rating || 'N/A',
-            business.user_ratings_total || 'N/A',
-            business.price_level !== undefined ? business.price_level : 'N/A', // Still need to understand this code
-            business.opening_hours?.open_now ? 'Open' : 'Closed',
-        ]),
+    const mailOptions = {
+        from: process.env.GMAIL_USER,
+        to: email,
+        subject,
+        text: message
     };
 
-    // Need to review this code for future changes
-    await sheets.spreadsheets.values.append({
-        spreadsheetId: SPREADSHEET_ID,
-        range: 'Sheet1!A2', 
-        valueInputOption: 'RAW',
-        resource,
-    });
-}
+    try {
+        const info = await transporter.sendMail(mailOptions);
+        res.status(200).json({ message: 'Email sent successfully', info });
+    } catch (error) {
+        console.error('Error sending email:', error);
+        res.status(500).json({ message: 'Error sending email', error: error.message });
+    }
+});
 
-mongoose.connect(MONGODB_URI, {
-        useNewUrlParser: true,
-        useUnifiedTopology: true,
-    }).then(() => {
-        console.log('Connected to MongoDB');
-    }).catch(err => {
-        console.error('Error connecting to MongoDB:', err);
-    });
+app.use('/api/users', userRoutes);
+app.use('/api/businesses', businessRoutes);
 
 app.get('/api/places', async (req, res) => {
     const { type, location } = req.query;
     if (!type || !location) {
         return res.status(400).send('Type and location are required');
     }
+    console.log(type, location);
 
     try {
         // Get the basic place details
@@ -130,7 +91,7 @@ app.get('/api/places', async (req, res) => {
         await appendToGoogleSheet(detailedPlaces);
 
         // Save data to MongoDB using Mongoose
-        await Business.insertMany(detailedPlaces);
+        await Business.insertMany(detailedPlaces); //Problem now!!!!
 
         // For Troubleshooting
         // console.log(detailedPlaces);
@@ -143,5 +104,5 @@ app.get('/api/places', async (req, res) => {
 });
 
 app.listen(PORT, () => {
-    console.log(`Server is running on port ${PORT}`);
+  console.log(`Server is running on port ${PORT}`);
 });
