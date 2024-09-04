@@ -1,6 +1,8 @@
 import mongoose from 'mongoose';
 
 const businessSchema = new mongoose.Schema({
+
+    place_id: { type: String, unique: true, required: true }, 
     name: { type: String, required: true },
     name: String,
     formatted_address: String,

@@ -4,14 +4,17 @@ import nodemailer from 'nodemailer';
 import mongoose from 'mongoose';
 import axios from 'axios';
 import cors from 'cors';
+import { parse } from 'json2csv';
+import fs from 'fs';
+import path from 'path';
 import { authenticateUser } from './middleware/authMiddleware.js';
 import { appendToGoogleSheet } from './services/googleSheetService.js';
 import userRoutes from './routes/userRoutes.js';
 import businessRoutes from './routes/businessRoutes.js';
 import Business from './models/businessModel.js';
-import pLimit from 'p-limit'; // Use this package to limit concurrency
+import pLimit from 'p-limit';
 
-const concurrencyLimit = 5; // Set the limit according needs
+const concurrencyLimit = 5;
 const limit = pLimit(concurrencyLimit);
 
 dotenv.config();
@@ -33,9 +36,9 @@ app.post('/api/email', async (req, res) => {
     const { email, subject, message } = req.body;
 
     const transporter = nodemailer.createTransport({
-        service: 'gmail', // Only up to 500 mails
+        service: 'gmail',
         host: 'smtp.gmail.com',
-        secure: false, 
+        secure: false,
         auth: {
             user: process.env.GMAIL_USER,
             pass: process.env.GMAIL_PASS
@@ -62,71 +65,106 @@ app.use('/api/users', userRoutes);
 app.use('/api/businesses', businessRoutes);
 
 app.get('/api/places', async (req, res) => {
-    const { type, location } = req.query;
+    const { type, location, page = 1, limit: resultsPerPage = 10 } = req.query;
+
     if (!type || !location) {
         return res.status(400).send('Type and location are required');
     }
 
-    console.log(type, location);
+    const pageNumber = parseInt(page, 10);
+    const resultsPerPageInt = parseInt(resultsPerPage, 10);
+
+    if (pageNumber < 1 || resultsPerPageInt < 1) {
+        return res.status(400).send('Invalid pagination parameters');
+    }
 
     try {
-        const allTime = Date.now();
-        let startTime = Date.now();
+        let places = [];
+        let nextPageToken = null;
+        let queriesRemaining = 50; // Number of queries to perform
 
-        // Get the basic place details 
-        const response = await axios.get('https://maps.googleapis.com/maps/api/place/textsearch/json', {
-            params: {
-                query: `${type} in ${location}`,
-                key: process.env.GOOGLE_API_KEY
+        while (queriesRemaining > 0) {
+            const response = await axios.get('https://maps.googleapis.com/maps/api/place/textsearch/json', {
+                params: {
+                    query: `${type} in ${location}`,
+                    key: process.env.GOOGLE_API_KEY,
+                    pagetoken: nextPageToken || undefined
+                }
+            });
+
+            places = places.concat(response.data.results);
+            nextPageToken = response.data.next_page_token;
+
+            if (!nextPageToken) break;
+
+            // Wait before using the next page token
+            await new Promise(resolve => setTimeout(resolve, 2000));
+            queriesRemaining--;
+        }
+
+        // Remove duplicates and upsert documents into MongoDB
+        const uniquePlaces = Array.from(new Map(places.map(place => [place.place_id, place])).values());
+
+        const bulkOps = uniquePlaces.map(place => ({
+            updateOne: {
+                filter: { place_id: place.place_id },
+                update: { $set: place },
+                upsert: true
             }
+        }));
+
+        if (bulkOps.length > 0) {
+            await Business.bulkWrite(bulkOps);
+        }
+
+        // Paginate data from MongoDB
+        const businesses = await Business.find()
+            .skip((pageNumber - 1) * resultsPerPageInt)
+            .limit(resultsPerPageInt)
+            .exec();
+
+        const total = await Business.countDocuments().exec();
+
+        res.json({
+            data: businesses,
+            total,
+            page: pageNumber,
+            limit: resultsPerPageInt,
         });
 
-        let durationInSeconds = (Date.now() - startTime) / 1000;
-        console.log(`Duration fetching basic data: ${durationInSeconds.toFixed(3)} seconds`);
-
-        startTime = Date.now();
-        const places = response.data.results;
-
-        // Fetch detailed place data with concurrency limit
-        const detailedPlaces = await Promise.all(
-            places.map(place => limit(() => 
-                axios.get('https://maps.googleapis.com/maps/api/place/details/json', {
-                    params: {
-                        place_id: place.place_id,
-                        key: process.env.GOOGLE_API_KEY,
-                        fields: 'name,formatted_address,formatted_phone_number,website,rating,opening_hours,user_ratings_total,icon'
-                    }
-                }).then(response => response.data.result)
-            ))
-        );
-
-        durationInSeconds = (Date.now() - startTime) / 1000;
-        console.log(`Duration fetching detailed data: ${durationInSeconds.toFixed(3)} seconds`);
-
-        // Push data to Google Sheets
-        startTime = Date.now();
-        await appendToGoogleSheet(detailedPlaces);
-        durationInSeconds = (Date.now() - startTime) / 1000;
-        console.log(`Duration writing to Google Sheets: ${durationInSeconds.toFixed(3)} seconds`);
-
-        // Send response
-        startTime = Date.now();
-        res.json(detailedPlaces);
-        durationInSeconds = (Date.now() - startTime) / 1000;
-        console.log(`Duration sending response: ${durationInSeconds.toFixed(3)} seconds`);
-
-        // Save data to Mongo
-        startTime = Date.now();
-        await Business.insertMany(detailedPlaces);
-        durationInSeconds = (Date.now() - startTime) / 1000;
-        console.log(`Duration saving to MongoDB: ${durationInSeconds.toFixed(3)} seconds`);
-
-        const overAllTime = (Date.now() - allTime) / 1000;
-        console.log('Over all time:' , overAllTime);
-
     } catch (error) {
-        console.error('Error fetching data from Google Places API:', error);
-        res.status(500).send('Error fetching data from Google Places API');
+        console.error('Error fetching or saving data:', error);
+        res.status(500).send('Error fetching or saving data');
+    }
+});
+
+app.get('/api/export', async (req, res) => {
+    try {
+        const businesses = await Business.find({}).exec();
+
+        const businessesInfo = businesses.map(business => {
+            const { _id, opening_hours, icon, __v, ...rest } = business.toObject();
+            return rest;
+        });
+
+        const csv = parse(businessesInfo);
+        console.log('Businesses Data:', businessesInfo);
+
+        const filePath = path.join(path.dirname(new URL(import.meta.url).pathname), 'businesses.csv');
+
+        fs.writeFileSync(filePath, csv);
+
+        res.download(filePath, 'businesses.csv', (err) => {
+            if (err) {
+                console.error('Error sending the file:', err);
+                res.status(500).send('Error exporting data');
+            } else {
+                fs.unlinkSync(filePath);
+            }
+        });
+    } catch (error) {
+        console.error('Error exporting data to CSV:', error);
+        res.status(500).send('Error exporting data');
     }
 });
 
