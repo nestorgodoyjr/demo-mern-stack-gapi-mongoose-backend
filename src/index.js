@@ -5,12 +5,9 @@ import mongoose from 'mongoose';
 import axios from 'axios';
 import cors from 'cors';
 import { parse } from 'json2csv';
-import fs from 'fs';
-import path from 'path';
+import Business from './models/businessModel.js';
 import userRoutes from './routes/userRoutes.js';
 import businessRoutes from './routes/businessRoutes.js';
-import Business from './models/businessModel.js';
-import pLimit from 'p-limit';
 
 dotenv.config();
 
@@ -142,20 +139,11 @@ app.get('/api/export', async (req, res) => {
 
     const csv = parse(businessesInfo);
 
-    // Use the /tmp directory for temporary file storage
-    const filePath = path.join('/tmp', 'businesses.csv');
+    // Send CSV directly in response
+    res.setHeader('Content-disposition', 'attachment; filename=businesses.csv');
+    res.setHeader('Content-type', 'text/csv');
+    res.send(csv);
 
-    fs.writeFileSync(filePath, csv);
-
-    res.download(filePath, 'businesses.csv', (err) => {
-      if (err) {
-        console.error('Error sending the file:', err);
-        res.status(500).send('Error exporting data');
-      } else {
-        // Optionally delete the file after it's sent
-        fs.unlinkSync(filePath);
-      }
-    });
   } catch (error) {
     console.error('Error exporting data to CSV:', error);
     res.status(500).send('Error exporting data');
