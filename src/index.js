@@ -17,15 +17,17 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 5000;
 
+// Middleware
 app.use(cors());
 app.use(express.json());
 
+// Connect to MongoDB
 mongoose.connect(process.env.MONGODB_URI, {
   useNewUrlParser: true,
   useUnifiedTopology: true,
 })
   .then(() => console.log('Connected to MongoDB'))
-  .catch((err) => console.error('Error connecting to MongoDB:', err));
+  .catch(err => console.error('Error connecting to MongoDB:', err));
 
 // Create and export the transporter
 export const transporter = nodemailer.createTransport({
@@ -38,6 +40,7 @@ export const transporter = nodemailer.createTransport({
   },
 });
 
+// Email sending route
 app.post('/api/email', async (req, res) => {
   const { email, subject, message } = req.body;
 
@@ -45,7 +48,7 @@ app.post('/api/email', async (req, res) => {
     from: process.env.GMAIL_USER,
     to: email,
     subject,
-    text: message
+    text: message,
   };
 
   try {
@@ -57,9 +60,11 @@ app.post('/api/email', async (req, res) => {
   }
 });
 
+// User and Business routes
 app.use('/api/users', userRoutes);
 app.use('/api/businesses', businessRoutes);
 
+// Google Places API and MongoDB operations
 app.get('/api/places', async (req, res) => {
   const { type, location, page = 1, limit: resultsPerPage = 10 } = req.query;
 
@@ -84,8 +89,8 @@ app.get('/api/places', async (req, res) => {
         params: {
           query: `${type} in ${location}`,
           key: process.env.GOOGLE_API_KEY,
-          pagetoken: nextPageToken || undefined
-        }
+          pagetoken: nextPageToken || undefined,
+        },
       });
 
       places = places.concat(response.data.results);
@@ -93,7 +98,7 @@ app.get('/api/places', async (req, res) => {
 
       if (!nextPageToken) break;
 
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      await new Promise(resolve => setTimeout(resolve, 2000)); // Google API rate limit
       queriesRemaining--;
     }
 
@@ -103,8 +108,8 @@ app.get('/api/places', async (req, res) => {
       updateOne: {
         filter: { place_id: place.place_id },
         update: { $set: place },
-        upsert: true
-      }
+        upsert: true,
+      },
     }));
 
     if (bulkOps.length > 0) {
@@ -131,6 +136,7 @@ app.get('/api/places', async (req, res) => {
   }
 });
 
+// Export to CSV route
 app.get('/api/export', async (req, res) => {
   try {
     const businesses = await Business.find({}).exec();
@@ -142,7 +148,7 @@ app.get('/api/export', async (req, res) => {
 
     const csv = parse(businessesInfo);
 
-    const __dirname = path.resolve(path.dirname(''));
+    const __dirname = path.resolve();
     const filePath = path.join(__dirname, 'businesses.csv');
 
     fs.writeFileSync(filePath, csv);
@@ -161,6 +167,7 @@ app.get('/api/export', async (req, res) => {
   }
 });
 
+
 const router = express.Router();
 
 router.get('/all-data', async (req, res) => {
@@ -175,6 +182,9 @@ router.get('/all-data', async (req, res) => {
 
 app.use('/api', router);
 
+
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
 });
+
+export default app;
