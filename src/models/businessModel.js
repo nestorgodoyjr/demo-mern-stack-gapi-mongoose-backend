@@ -1,10 +1,8 @@
 import mongoose from 'mongoose';
 
 const businessSchema = new mongoose.Schema({
-
-    place_id: { type: String, unique: true, required: true }, 
+    place_id: { type: String, unique: true, required: true },
     name: { type: String, required: true },
-    name: String,
     formatted_address: String,
     formatted_phone_number: String,
     website: String,
@@ -13,8 +11,8 @@ const businessSchema = new mongoose.Schema({
     opening_hours: Object,
     price_level: Number,
     icon: String,
-    user: { type: mongoose.Schema.Types.ObjectId, ref: 'User' } // Reference to the user who added the business
-});
+    user: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
+  });
 
 const Business = mongoose.model('Business', businessSchema);
 
