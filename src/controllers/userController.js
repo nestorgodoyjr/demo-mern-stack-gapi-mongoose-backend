@@ -1,39 +1,49 @@
-import User from '.././models/userModel.js';
 import jwt from 'jsonwebtoken';
+import User from '../models/userModel.js';
 
-export const registerUser = async (req, res) => {
-  try {
-    const { username, email, password } = req.body;
-    const user = new User({ username, email, password });
-    await user.save();
-    console.log(username);
-    console.log(email);
-    console.log(password);
-    res.status(201).json({ message: 'User registered successfully' });
-  } catch (error) {
-    console.error('Error registering user:', error);
-    res.status(500).json({ error: 'Error registering user' });
-  }
+// Generate JWT Token
+const generateToken = (id) => {
+  return jwt.sign({ id }, process.env.JWT_SECRET, {
+    expiresIn: '1h',
+  });
 };
 
+// Login User
 export const loginUser = async (req, res) => {
+  const { email, password } = req.body;
   try {
-    const { email, password } = req.body;
     const user = await User.findOne({ email });
-    
-    if (!user || !(await user.comparePassword(password))) {
+    if (!user) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
-    const token = jwt.sign({ userId: user._id }, process.env.JWT_SECRET, {
-      expiresIn: '1h',
-    });
-    console.log('JWT_SECRET:', process.env.JWT_SECRET);
+    const isPasswordCorrect = await user.comparePassword(password);
+    if (!isPasswordCorrect) {
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
 
-
+    const token = generateToken(user._id);
     res.json({ token, user });
   } catch (error) {
     console.error('Error logging in user:', error);
-    res.status(500).json({ error: 'Error logging in user' });
+    res.status(500).json({ error: 'Server error' });
+  }
+};
+
+// Register User (Optional if you want to add a registration route)
+export const registerUser = async (req, res) => {
+  const { email, password } = req.body;
+  try {
+    const userExists = await User.findOne({ email });
+    if (userExists) {
+      return res.status(400).json({ error: 'User already exists' });
+    }
+
+    const user = await User.create({ email, password });
+    const token = generateToken(user._id);
+    res.status(201).json({ token, user });
+  } catch (error) {
+    console.error('Error registering user:', error);
+    res.status(500).json({ error: 'Server error' });
   }
 };
